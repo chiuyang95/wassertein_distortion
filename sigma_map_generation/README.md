@@ -2,4 +2,4 @@ This repository contains the code for [Wasserstein Distortion with Intrinsic $\s
 
 To execute, run `python3 sigma_map_gen.py 'NAME_OF_SOURCE_IMAGE'` (e.g., `python3 sigma_map_gen.py 'zebra'`)
 
-This code is tested on Python 3.10 + TensorFlow 2.11
+This code is tested on Python 3.10 + TensorFlow 2.11 

@@ -2,7 +2,7 @@
     @author: Yang Qiu and Ziyuan Lin
 
     code for 'Wasserstein distortion with Intrinsic sigma-maps'
-'''
+''' 
 
 import numpy as np 
 import tensorflow as tf
