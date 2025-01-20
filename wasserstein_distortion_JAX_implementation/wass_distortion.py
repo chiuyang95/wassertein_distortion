@@ -17,9 +17,6 @@
 #
 # ==============================================================================
 
-
-"""Helper functions for PSNR computations."""
-
 import jax
 import jax.numpy as jnp
 import h5py
@@ -42,14 +39,15 @@ import h5py
 #   for i in range(4):
 #     size_list.append([int(H/(2**(i+1))),int(W/(2**(i+1)))])
 #   return size_list
+# use this if feature layer sizes unknown
 
 if os.path.exists('pmf.p'):
-
   pmf_list = pickle.load(open('pmf.p','rb'))
+  # plug in if pre-calculated pooling pmf for this size_list existed already
 
 else:
 
-  size_list = [[512,512],[256,256],[128,128],[64,64],[32,32]]
+  size_list = [[512,512],[256,256],[128,128],[64,64],[32,32]] # hard-coding list of feature layer sizes for efficiency
 
   def get_pmf(size_list): # find pooling pmf
     sigma = 8
@@ -66,7 +64,7 @@ else:
     return pmf_list
 
   pmf_list = get_pmf(size_list)
-  pickle.dump(pmf_list,open('pmf.p','wb'))
+  pickle.dump(pmf_list,open('pmf.p','wb')) # save pooling pmf to file for efficiency
 
 # =================================================
 # VGG structure

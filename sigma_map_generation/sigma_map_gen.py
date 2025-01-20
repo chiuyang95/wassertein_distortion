@@ -1,7 +1,7 @@
 '''
-    @author: Yang QIU
+    @author: Yang Qiu and Ziyuan Lin
 
-    code for 'Wasserstein distortion with Intrinsic sigma-maps' @ Compression Workshop, NeurIPS 2024
+    code for 'Wasserstein distortion with Intrinsic sigma-maps'
 '''
 
 import numpy as np 
@@ -18,8 +18,12 @@ import datetime
 class SigmaMapGen(object):
 
     def __init__(self, tex_path):
+        '''
+            read source image and get properties
+            tex_path: path to source image
+        '''
         self.height, self.width = image.load_img(tex_path).size
-        self.channels = 3 # 3 for rgb, 1 for grayscaleK.variable(
+        self.channels = 3 # 3 for rgb, 1 for grayscale
         self.tex_path = tex_path
         filename = os.path.basename(tex_path)
         filename = os.path.splitext(filename)[0]
@@ -60,7 +64,9 @@ class SigmaMapGen(object):
 
     def get_pmf(self, sigma_sequence):
         '''
-            generate pooling pmf, gaussian
+            generate pooling pmf
+            for each possible sigma values, generate a 2d centered discretized gaussian pmf with variance sigma squared
+            of size 2*sigma towards each direction (since this would cover 91% of total probability mass by 3 sigma rule)
         '''
         tsg_lists = {}
         for sigma in sigma_sequence:
@@ -81,7 +87,8 @@ class SigmaMapGen(object):
 
     def get_moments(self,tex,tsg):
         '''
-            calculate first two moments for wasserstein distortion
+            calculate first two moments via adequately padding the source image and convolving with the pmf
+            the first two moments are needed for gaussianized wasserstein distortion
         '''
         tex = tf.expand_dims(tex, axis=0)
         kernel_size = len(tsg)
@@ -99,7 +106,7 @@ class SigmaMapGen(object):
 
     def get_wass_dist(self, tex, sigma_sequence):
         '''
-            get list of wasserstein distortions of all sigma pairs
+            get list of wasserstein distortions of all adjacent sigma pairs from sigma_sequence
         '''
         tsg_lists = self.get_pmf(sigma_sequence)
         mean_tex_all = []
@@ -211,5 +218,5 @@ class SigmaMapGen(object):
         print('get a sigma value done with {}'.format(str(datetime.timedelta(seconds=end - start))))
 
 
-smap = SigmaMapGen(tex_path='./SALICON/zebra.jpg')
+smap = SigmaMapGen(tex_path='./source/'+sys.argv[1]+'.jpg')
 smap.buildSigmaMap()
