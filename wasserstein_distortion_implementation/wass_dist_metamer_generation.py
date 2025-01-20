@@ -1,10 +1,9 @@
 '''
-    @author: Yang QIU
+    author: Yang Qiu
 
-    this code is developed based on @Md Sarfarazul Haque's impelementation
+    this code is developed based on @ Md Sarfarazul Haque's impelementation
     https://github.com/mdsarfarazulh/deep-texture-synthesis-cnn-keras
-    of the paper Texture Synthesis Using Convolutional Neural Networks by
-    Gatys et al.
+    of the 2015 paper Texture Synthesis Using Convolutional Neural Networks by Gatys et al.
 '''
 
 import numpy as np 
@@ -17,10 +16,14 @@ import sys
 import os
 import time
 
-from vgg19_n import VGG19 # The customed VGG19 network is based on fchollet implementation of VGG19
-                    # from https://github.com/fchollet/deep-learning-models/blob/master/vgg19.py
-                    # and the normalized weights, as suggested in Gaty et al.'s paper, is translated
-                    # from https://github.com/paulu/deepfeatinterp/blob/master/models/VGG_CNN_19/vgg_normalised.caffemodel 
+import pickle
+
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+
+from vgg19_n import VGG19 # the customed VGG19 network is based on @fchollet implementation of VGG19
+        # from https://github.com/fchollet/deep-learning-models/blob/master/vgg19.py
+        # and the normalized weights, as suggested in Gaty et al.'s paper, is translated
+        # from https://github.com/paulu/deepfeatinterp/blob/master/models/VGG_CNN_19/vgg_normalised.caffemodel 
 from keras import backend as K 
 import tensorflow as tf
 tf.compat.v1.disable_eager_execution()
@@ -31,6 +34,11 @@ tf.compat.v1.disable_eager_execution()
 class DeepTexture(object):
 
     def __init__(self, tex_path, base_img_path=None):
+        '''
+            read source image and get properties
+            tex_path: path to source image
+            base_img_path: initiation for reconstruction; if None, random initiation
+        '''
         self.height, self.width = image.load_img(tex_path).size
         self.loss_value = None
         self.grad_values = None
@@ -38,11 +46,13 @@ class DeepTexture(object):
         if base_img_path == None:
             x = np.random.rand(self.height, self.width, self.channels)
             x = np.expand_dims(x, axis=0)
-            self.base_img = x[:,:,:,::-1].astype(np.float32) # 'RGB' -> 'BGR'
+            self.base_img = x[:,:,:,::-1].astype(np.float32) # 'RGB' -> 'BGR' for VGG input req.
         else:
             self.base_img = self.preprocess_image(base_img_path) # If base_img_path is not `None`
                                                                  # then use that image as base image
         saliency_path = tex_path.replace('.jpg','_sali.png')
+        if not os.path.isfile(saliency_path):
+            raise Exception('Couldn\'t find companion saliency map!')
         self.tex_path = tex_path
         self.saliency_path = saliency_path
         if K.image_data_format() == 'channels_last':
@@ -81,85 +91,91 @@ class DeepTexture(object):
 
     def get_sigma_map(self,saliency):
         '''
-            generates sigma map from saliency map 
+            generates sigma map from saliency map
+            pixels with salience value below thresh are set to sigma = 0
+            other pixels have sigma values proportional to distance to sigma 0 region
         '''
-        lmbda = 1.5
+        lmbda = 1.5 # slope constant
         [current_height,current_width] = [saliency.shape[0],saliency.shape[1]]
         sigma0_thresh = np.min([.1,np.max(saliency)/8])
         sigma_map = np.ones([current_height,current_width])
-        sigma_map[saliency > sigma0_thresh] = 0
+        sigma_map[saliency > sigma0_thresh] = 0 # set sigma = 0 if salience < sigma0_thresh
         sigma0_pixels = np.squeeze(np.transpose(np.expand_dims(np.where(sigma_map == 0),axis=1)))
         rest = np.squeeze(np.transpose(np.expand_dims(np.where(sigma_map == 1),axis=1)))
         for pixel in rest:
             dist = np.min(np.sum(np.abs(pixel-sigma0_pixels),axis=1))
-            sigma_map[pixel[0],pixel[1]] = dist*lmbda
+            sigma_map[pixel[0],pixel[1]] = dist*lmbda # sigma proportional to distance to sigma 0 region w/ slope lmbda
         return sigma_map
 
 
-    def get_tsg(self,size_list,saliency):
+    def get_pmf(self,size_list,saliency):
         '''
-            generates the a 3-D array for two-sided geoemetric distribution, first two dimension corresponds to 
-            the probability mass for the corresponding pixel for corresp. spatial dimension, and last dimension
-            corresponds to one particular pixel of interest
+            generates pooling pmf
+            a 3-D array for discretized 2d gaussian distribution, first two dimension corresponds to 
+            the probability mass for pixel locations, and last dimension corresponds to evaluation pixels,
+            i.e., each pmf[:,:,i] is the pooling pmf centered at i-th evaluation pixel location
         '''
-        tsg_list_sizes = {}
+        pmf_list_sizes = {}
         sigma0_list = {}
         for size in size_list:
             current_height = size[0]
-            current_width = size[1]
-            print('current size is ' + str(size))
+            current_width = size[1] 
+            print('current size is ' + str(size)) # get size of current feature layer
             ratio_height = int(self.height/current_height)
             ratio_width = int(self.width/current_width)
             current_saliency = skimage.measure.block_reduce(saliency,\
-                    (ratio_height,ratio_width), np.mean)
+                    (ratio_height,ratio_width), np.mean) # scale companion saliency map to match size
             sigma_map = self.get_sigma_map(current_saliency)
             sigma0_pixels = np.squeeze(np.transpose(np.expand_dims(np.where(sigma_map == 0),axis=1)))
             sigma0_list[current_height] = sigma0_pixels
             rest = np.squeeze(np.transpose(np.expand_dims(np.where(sigma_map != 0),axis=1)))
-            tsg_list = []
+                # obtain sigma map and evaluation pixels for current feature layer
+            pmf_list = []
             for i in range(20):
                 nonzero_eval_pixels_indx = np.random.choice(rest.shape[0],50,replace=False)
-                pixels_of_interest = rest[nonzero_eval_pixels_indx]
-                tsg_list_temp = []
-                for pixel in pixels_of_interest:
+                    # randomly choose 20 sets of 50 evaluation points for each feature layer;
+                    # randomly choose a set during each sgd step
+                eval_pixels = rest[nonzero_eval_pixels_indx]
+                pmf_list_temp = []
+                for pixel in eval_pixels:
                     [i_height,i_width] = pixel
                     sigma = sigma_map[i_height,i_width]
                     if sigma == 0:
                         raise Exception('Sigma here should be strictly positive')
                     else:
-                        tsg_temp = np.array([[((np.exp(1/sigma)-1)/(np.exp(1/sigma)+1))*\
+                        pmf_temp = np.array([[((np.exp(1/sigma)-1)/(np.exp(1/sigma)+1))*\
                                     np.exp(-(np.abs(i_ref_p)+np.abs(j_ref_p))/sigma)\
                                     for j_ref_p in range(-i_width+1,current_width-i_width+1)]\
                                     for i_ref_p in range(-i_height+1,current_height-i_height+1)])
-                        tsg_temp = tsg_temp/np.sum(tsg_temp)
-                        tsg_temp = np.expand_dims(tsg_temp,axis=2)
-                        tsg_list_temp.append(tsg_temp)
-                tsg_list_temp = np.expand_dims(np.concatenate(tsg_list_temp,axis=2),axis=2)
-                tsg_list_temp_tf = tf.convert_to_tensor(tsg_list_temp,dtype=tf.float32)
-                tsg_list.append(tsg_list_temp)
-            tsg_list_sizes[current_height] = tsg_list
-        return tsg_list_sizes,sigma0_list
+                        pmf_temp = pmf_temp/np.sum(pmf_temp)
+                        pmf_temp = np.expand_dims(pmf_temp,axis=2)
+                        pmf_list_temp.append(pmf_temp)
+                pmf_list_temp = np.expand_dims(np.concatenate(pmf_list_temp,axis=2),axis=2)
+                pmf_list_temp_tf = tf.convert_to_tensor(pmf_list_temp,dtype=tf.float32)
+                pmf_list.append(pmf_list_temp)
+            pmf_list_sizes[current_height] = pmf_list
+        return pmf_list_sizes,sigma0_list
 
     
-    def gauss_wass_dist(self,tex,gen,tsg_list_sizes,sigma0_list):
+    def gauss_wass_dist(self,tex,gen,pmf_list_sizes,sigma0_list):
         '''
-            calculate the distortion for output of each layer
+            calculate wasserstein distortion of each feature layer
         '''
-        rdm_indx = np.random.randint(low=0,high=20)
+        rdm_indx = np.random.randint(low=0,high=20) # random choice of set of eval pixels
         current_height = tex.shape[0]
         current_width = tex.shape[1]
-        tsg_list = tsg_list_sizes[current_height]
-        tsg = tsg_list[rdm_indx]
+        pmf_list = pmf_list_sizes[current_height]
+        pmf = pmf_list[rdm_indx] # get pmf
         sigma0_pixels = sigma0_list[current_height]
-        mean_tex = tf.reduce_sum(tsg*tex,axis=[0,1])
-        mean_gen = tf.reduce_sum(tsg*gen,axis=[0,1])
-        std_tex = tf.math.sqrt(tf.nn.relu(tf.reduce_sum((tex**2)*tsg,axis=[0,1]) -\
+        mean_tex = tf.reduce_sum(pmf*tex,axis=[0,1])
+        mean_gen = tf.reduce_sum(pmf*gen,axis=[0,1])
+        std_tex = tf.math.sqrt(tf.nn.relu(tf.reduce_sum((tex**2)*pmf,axis=[0,1]) -\
                                         tf.math.square(mean_tex))+1e-7)
-        std_gen = tf.math.sqrt(tf.nn.relu(tf.reduce_sum((gen**2)*tsg,axis=[0,1]) -\
-                                        tf.math.square(mean_gen))+1e-7)
+        std_gen = tf.math.sqrt(tf.nn.relu(tf.reduce_sum((gen**2)*pmf,axis=[0,1]) -\
+                                        tf.math.square(mean_gen))+1e-7) # gaussianized wass distortion 
         tex_sigma0 = tf.gather_nd(tex,sigma0_pixels)
         gen_sigma0 = tf.gather_nd(gen,sigma0_pixels)
-        dist_sigma0 = tf.reduce_sum((tex_sigma0-gen_sigma0)**2)
+        dist_sigma0 = tf.reduce_sum((tex_sigma0-gen_sigma0)**2) # when sigma = 0, reduce to mse
         return tf.reduce_sum((mean_tex-mean_gen)**2 + (std_tex-std_gen)**2)*100 + dist_sigma0
         
 
@@ -214,11 +230,14 @@ class DeepTexture(object):
         tex_img = K.variable(self.preprocess_image(self.tex_path))
         gen_img = K.placeholder(shape=self.input_shape)
         input_tensor = K.concatenate([tex_img, gen_img], axis=0)
-        model = VGG19(include_top=False, input_tensor=input_tensor, weights='normalized')
+        model = VGG19(include_top=False, input_tensor=input_tensor, weights='normalized') # get vgg-19 for feature extraction
         outputs_dict = dict([(layer.name, layer.output) for layer in model.layers])
         loss = K.variable(0.)
         flag = True
         all_layers = [layer.name for layer in model.layers[1:]]
+
+        # feature_layers: layers that we calculate wasserstein distortion over
+        # choose from defaults or list layer names
         if features == 'all':
             feature_layers = all_layers
         elif features == 'pool':
@@ -247,12 +266,13 @@ class DeepTexture(object):
             total_shape.append(shape)
         total_shape = np.array(total_shape[1:])
         size_list = np.unique(total_shape[:,1:3],axis=0)
-        total_layer_no = len(feature_layers)
+        total_layer_no = len(feature_layers) # get size of each layer
 
-        saliency = np.array(image.load_img(self.saliency_path,color_mode='grayscale'))/255
+        saliency = np.array(image.load_img(self.saliency_path,color_mode='grayscale'))/255 
+            # read saliency map as a grayscale image
         
         start = time.time()
-        tsg_list_sizes,sigma0_list = self.get_tsg(size_list,saliency)
+        pmf_list_sizes,sigma0_list = self.get_pmf(size_list,saliency) # obtain all pmf's
         end = time.time()
         print('get two sided geometric list doen with %.2f secs' % (end - start))
 
@@ -261,22 +281,24 @@ class DeepTexture(object):
             tex_features = layer_features[0, :, :, :]
             gen_features = layer_features[1, :, :, :]
             tex_features = tf.expand_dims(tex_features, axis=3)
-            gen_features = tf.expand_dims(gen_features, axis=3)
+            gen_features = tf.expand_dims(gen_features, axis=3) # get feature layer
             
-            layer_loss = self.gauss_wass_dist(tex_features, gen_features,tsg_list_sizes,sigma0_list)
+            layer_loss = self.gauss_wass_dist(tex_features, gen_features,pmf_list_sizes,sigma0_list)
+                # get wasserstein distortion for the layer
 
             if (i_layer+1) <= int(total_layer_no/3):
                 layer_weight = 10
             elif (i_layer+1) <= int(2*total_layer_no/3):
                 layer_weight = 5
             else:
-                layer_weight = 1
+                layer_weight = 1 # specify layer weights
 
-            loss = loss + layer_loss*layer_weight
+            loss = loss + layer_loss*layer_weight # weighted sum over each layer
             
         tex_pixels = tf.expand_dims(tf.squeeze(tex_img)/255.,axis=3)
         gen_pixels = tf.expand_dims(tf.squeeze(gen_img)/255.,axis=3)
-        loss = loss + self.gauss_wass_dist(tex_pixels,gen_pixels,tsg_list_sizes,sigma0_list)*100
+        loss = loss + self.gauss_wass_dist(tex_pixels,gen_pixels,pmf_list_sizes,sigma0_list)*100
+            # 0th layer is the image itself
         
         grads = tf.gradients(loss, gen_img)
         outputs = [loss]
@@ -295,7 +317,7 @@ class DeepTexture(object):
         for i in range(iterations):
             start_time = time.time()
             x, min_val, info = fmin_l_bfgs_b(func=self.get_loss, x0=x.flatten(),\
-                                                fprime=self.get_grads, maxfun=20)
+                                                fprime=self.get_grads, maxfun=20) # L-BFGS-B alg for sgd
             min_val_list.append(min_val)
 
             if math.isnan(min_val):
@@ -303,7 +325,7 @@ class DeepTexture(object):
                 sys.exit()
             elif i <= 30:
                 continue
-            elif min_val >= np.min(min_val_list[-31:-1]):
+            elif min_val >= np.min(min_val_list[-31:-1]): # early stopping criteria
                 print('loss didn\'t drop after 30 iterations')
                 print('Current loss value:', min_val)
                 img = self.deprocess_image(x.copy())
@@ -314,7 +336,7 @@ class DeepTexture(object):
                 print('Image saved as', fname)
                 print('Iteration %d completed in %.2f secs' % ((i+1), end_time - start_time))
                 break
-            elif (i+1)%50 == 0:
+            elif (i+1)%50 == 0: # save outputs every 50 iters
                 print('Current loss value:', min_val)
                 img = self.deprocess_image(x.copy())
                 fname = './output/' + self.filename + '_reproduction_at_iteration_%d.png' % (i+1)
@@ -332,5 +354,5 @@ class DeepTexture(object):
         print('All iterations completed in %.2f secs' % (total_end_time - total_start_time))
 
 
-tex = DeepTexture(tex_path='./SALICON/horses.jpg') # base_img_path='reconstruction.jpg'
-tex.buildTexture(features='4nopool',iterations=4000)
+tex = DeepTexture(tex_path='./source/'+sys.argv[1]+'.jpg') # base_img_path='PATH_TO_RECONSTRUCTION_INIT'
+tex.buildTexture(features='4nopool',iterations=4000) # features specify which layers of vgg-19 to use as features
