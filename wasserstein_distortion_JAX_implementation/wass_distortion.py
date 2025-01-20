@@ -161,4 +161,4 @@ def loss_fn(a,b):
   features_a = compute_features(a)
   features_b = compute_features(b)
   l = wasserstein_distortion(features_a,features_b,pmf_list)
-  return l
+  return l 
