@@ -68,38 +68,38 @@ class SigmaMapGen(object):
             for each possible sigma values, generate a 2d centered discretized gaussian pmf with variance sigma squared
             of size 2*sigma towards each direction (since this would cover 91% of total probability mass by 3 sigma rule)
         '''
-        tsg_lists = {}
+        pmf_lists = {}
         for sigma in sigma_sequence:
             kernel_size = int(4 * sigma - 1)
             current_height = int(kernel_size / 2)
             current_width = int(kernel_size / 2)
-            tsg_current = np.array([[np.exp(-((i_ref_p)**2 + (j_ref_p)**2) / (2*sigma**2)) \
+            pmf_current = np.array([[np.exp(-((i_ref_p)**2 + (j_ref_p)**2) / (2*sigma**2)) \
                                   for j_ref_p in range(-current_width, current_width + 1)] \
                                  for i_ref_p in range(-current_height, current_height + 1)])
-            tsg_current = tsg_current / np.sum(tsg_current)
-            tsg_current = np.expand_dims(tsg_current, axis=-1)
-            tsg_current = np.expand_dims(tsg_current, axis=-1)
-            tsg_current = np.repeat(tsg_current, 3, axis=-1)
-            tsg_current_tf = tf.convert_to_tensor(tsg_current, dtype=tf.float32)
-            tsg_lists[sigma] = tsg_current_tf
-        return tsg_lists
+            pmf_current = pmf_current / np.sum(pmf_current)
+            pmf_current = np.expand_dims(pmf_current, axis=-1)
+            pmf_current = np.expand_dims(pmf_current, axis=-1)
+            pmf_current = np.repeat(pmf_current, 3, axis=-1)
+            pmf_current_tf = tf.convert_to_tensor(pmf_current, dtype=tf.float32)
+            pmf_lists[sigma] = pmf_current_tf
+        return pmf_lists
 
 
-    def get_moments(self,tex,tsg):
+    def get_moments(self,tex,pmf):
         '''
             calculate first two moments via adequately padding the source image and convolving with the pmf
             the first two moments are needed for gaussianized wasserstein distortion
         '''
         tex = tf.expand_dims(tex, axis=0)
-        kernel_size = len(tsg)
+        kernel_size = len(pmf)
         padding_size = int((kernel_size + 1) / 2) - 1
         padding = tf.constant([[0, 0], [padding_size, padding_size],\
                         [padding_size, padding_size], [0, 0]])
         tex_padded = tf.pad(tex, padding, "SYMMETRIC")
-        mean_tex = tf.nn.conv2d(tex_padded, tsg, strides=[1, 1, 1, 1], padding='VALID')
+        mean_tex = tf.nn.conv2d(tex_padded, pmf, strides=[1, 1, 1, 1], padding='VALID')
         mean_tex_padded = tf.pad(mean_tex, padding, "SYMMETRIC")
         squared_diff_tex = (tex_padded - mean_tex_padded) ** 2
-        var_tex = tf.maximum(tf.nn.conv2d(squared_diff_tex, tsg,\
+        var_tex = tf.maximum(tf.nn.conv2d(squared_diff_tex, pmf,\
                                     strides=[1, 1, 1, 1], padding='VALID'), 0)
         return mean_tex,var_tex
 
@@ -108,13 +108,13 @@ class SigmaMapGen(object):
         '''
             get list of wasserstein distortions of all adjacent sigma pairs from sigma_sequence
         '''
-        tsg_lists = self.get_pmf(sigma_sequence)
+        pmf_lists = self.get_pmf(sigma_sequence)
         mean_tex_all = []
         var_tex_all = []
         for sigma in sigma_sequence: # traverse through all sigma values, and calculate moments
 
-            tsg = tsg_lists[sigma]
-            mean_tex_tmp,var_tex_tmp = self.get_moments(tex,tsg)
+            pmf = pmf_lists[sigma]
+            mean_tex_tmp,var_tex_tmp = self.get_moments(tex,pmf)
             mean_tex_all.append(mean_tex_tmp)
             var_tex_all.append(var_tex_tmp)
 
