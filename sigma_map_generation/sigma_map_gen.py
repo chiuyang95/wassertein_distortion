@@ -132,7 +132,7 @@ class SigmaMapGen(object):
             generates sigma map from original picture
         '''
         [height, width] = [tex.shape[0], tex.shape[1]]
-        sigma_sequence = self.generate_sigma_sequence(height/2.) 
+        sigma_sequence = self.generate_sigma_sequence(np.min([height,width])/2.) 
                                     # set max sigma value to be half the image height
         sigma_map = np.zeros([height, width])
         wd_sigma_list = self.get_wass_dist(tex, sigma_sequence)
@@ -160,6 +160,8 @@ class SigmaMapGen(object):
                 # Find the first index where sigma is greater than 10
                 if is_top_five:
                     start_index = pixel_wd_values.index(max_wd_under_5) + 1
+                    discount = 3/7
+                    overall_max = overall_max*discount
                 else:
                     start_index = next(
                         (index-1 for index, sigma in enumerate(sigma_sequence) if sigma >= 15),
