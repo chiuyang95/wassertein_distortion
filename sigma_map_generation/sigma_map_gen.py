@@ -22,8 +22,6 @@ class SigmaMapGen(object):
             read source image and get properties
             tex_path: path to source image
         '''
-        self.height, self.width = image.load_img(tex_path).size
-        self.channels = 3 # 3 for rgb, 1 for grayscale
         self.tex_path = tex_path
         filename = os.path.basename(tex_path)
         filename = os.path.splitext(filename)[0]
@@ -34,7 +32,7 @@ class SigmaMapGen(object):
         '''
             read the image
         '''
-        img = image.load_img(img_path, target_size=(self.height, self.width))
+        img = image.load_img(img_path)
         img = image.img_to_array(img)
         return img
 
